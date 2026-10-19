@@ -1,0 +1,10 @@
+# Daten & Geheimnisse - niemals committen
+contest.db*
+*.db-wal
+*.db-shm
+admin.hash
+admin-initial-password.txt
+static/uploads/*
+!static/uploads/.gitkeep
+__pycache__/
+*.pyc

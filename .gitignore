@@ -9,3 +9,4 @@ static/uploads/*
 __pycache__/
 *.pyc
 app.log
+tls/

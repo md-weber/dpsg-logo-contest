@@ -394,6 +394,29 @@ class Tls(unittest.TestCase):
         except urllib.error.URLError as e:
             self.fail(f"TLS request failed: {e}")
 
+    def test_bad_handshake_does_not_kill_listener(self):
+        """Regression: ein fehlgeschlagener TLS-Handshake (Scanner/Bots) darf den
+        Annahme-Thread nicht beenden - sonst nimmt der Server keine Verbindungen mehr an."""
+        import socket, ssl, urllib.request
+        # Müll statt TLS-Handshake senden
+        for payload in (b"GARBAGE\r\n\r\n", b"\x00\x01\x02\x03", b""):
+            try:
+                s = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+                if payload:
+                    s.sendall(payload)
+                s.close()
+            except OSError:
+                pass
+        # Server muss danach weiterhin antworten
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        try:
+            r = urllib.request.urlopen(f"https://127.0.0.1:{self.port}/", context=ctx, timeout=10)
+            self.assertEqual(r.status, 200, "Listener hat nach Bad-Handshake nicht mehr geantwortet")
+        except Exception as e:
+            self.fail(f"Listener wurde durch fehlerhaften Handshake getötet: {e}")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

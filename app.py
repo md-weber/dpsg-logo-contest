@@ -26,6 +26,7 @@ import os
 import re
 import secrets
 import sqlite3
+import ssl
 import threading
 import time
 import traceback
@@ -1038,7 +1039,6 @@ class Server(ThreadingHTTPServer):
 
 
 def make_tls_server_bind():
-    import ssl
     cert = os.environ.get("TLS_CERT") or os.path.join(DATA_DIR, "tls", "cert.pem")
     key = os.environ.get("TLS_KEY") or os.path.join(DATA_DIR, "tls", "key.pem")
     if not (os.path.exists(cert) and os.path.exists(key)):
@@ -1058,15 +1058,18 @@ class TLSServer(ThreadingHTTPServer):
         super().__init__(*a, **kw)
 
     def get_request(self):
-        sock, addr = self.socket.accept()
-        try:
-            return self._ctx.wrap_socket(sock, server_side=True), addr
-        except (ssl.SSLError, OSError):
+        """Fehlgeschlagene Handshakes (Scanner, Bots, TLS-Probing) dürfen den
+        Annahme-Thread NICHT killen: Socket schließen und nächste Verbindung annehmen."""
+        while True:
+            sock, addr = self.socket.accept()
             try:
-                sock.close()
-            except OSError:
-                pass
-            raise
+                return self._ctx.wrap_socket(sock, server_side=True), addr
+            except (ssl.SSLError, OSError):
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+                continue
 
 
 def main():
@@ -1074,15 +1077,15 @@ def main():
     ensure_admin_hash()
     tls_ctx, cert = make_tls_server_bind()
     https_port = int(os.environ.get("HTTPS_PORT", "8443"))
+    http_bind = os.environ.get("HTTP_BIND", "127.0.0.1")   # nur lokal, wenn HTTPS aktiv
     https_srv = None
     if tls_ctx:
         https_srv = TLSServer(tls_ctx, ("0.0.0.0", https_port), App)
-        print(f"HTTPS läuft auf :{https_port} (Zertifikat: {cert})", flush=True)
-    srv = Server(("0.0.0.0", PORT), App)
-    print(f"Logo-Wettbewerb läuft auf :{PORT} (Daten: {DATA_DIR})", flush=True)
+        print(f"HTTPS läuft auf 0.0.0.0:{https_port} (Zertifikat: {cert})", flush=True)
+    srv = Server((http_bind, PORT), App)
+    print(f"HTTP (intern) läuft auf {http_bind}:{PORT} (Daten: {DATA_DIR})", flush=True)
     try:
         if https_srv:
-            import threading
             threading.Thread(target=https_srv.serve_forever, daemon=True).start()
         srv.serve_forever()
     except KeyboardInterrupt:

@@ -1037,12 +1037,53 @@ class Server(ThreadingHTTPServer):
     request_queue_size = 64
 
 
+def make_tls_server_bind():
+    import ssl
+    cert = os.environ.get("TLS_CERT") or os.path.join(DATA_DIR, "tls", "cert.pem")
+    key = os.environ.get("TLS_KEY") or os.path.join(DATA_DIR, "tls", "key.pem")
+    if not (os.path.exists(cert) and os.path.exists(key)):
+        return None, None
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.load_cert_chain(certfile=cert, keyfile=key)
+    return ctx, cert
+
+
+class TLSServer(ThreadingHTTPServer):
+    daemon_threads = True
+    request_queue_size = 64
+
+    def __init__(self, ctx, *a, **kw):
+        self._ctx = ctx
+        super().__init__(*a, **kw)
+
+    def get_request(self):
+        sock, addr = self.socket.accept()
+        try:
+            return self._ctx.wrap_socket(sock, server_side=True), addr
+        except (ssl.SSLError, OSError):
+            try:
+                sock.close()
+            except OSError:
+                pass
+            raise
+
+
 def main():
     init_db()
     ensure_admin_hash()
+    tls_ctx, cert = make_tls_server_bind()
+    https_port = int(os.environ.get("HTTPS_PORT", "8443"))
+    https_srv = None
+    if tls_ctx:
+        https_srv = TLSServer(tls_ctx, ("0.0.0.0", https_port), App)
+        print(f"HTTPS läuft auf :{https_port} (Zertifikat: {cert})", flush=True)
     srv = Server(("0.0.0.0", PORT), App)
     print(f"Logo-Wettbewerb läuft auf :{PORT} (Daten: {DATA_DIR})", flush=True)
     try:
+        if https_srv:
+            import threading
+            threading.Thread(target=https_srv.serve_forever, daemon=True).start()
         srv.serve_forever()
     except KeyboardInterrupt:
         pass

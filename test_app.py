@@ -354,5 +354,46 @@ class Pdf(unittest.TestCase):
         self.assertIn(b"F\xe4hrte-Lied-C543", content)
 
 
+class Tls(unittest.TestCase):
+    """HTTPS-Listener: bindet nur, wenn ein Zertifikat vorhanden ist."""
+
+    @classmethod
+    def setUpClass(cls):
+        import ssl, subprocess, tempfile, os
+        cls.certdir = tempfile.mkdtemp(prefix="logo-tls-")
+        cls.cert = os.path.join(cls.certdir, "cert.pem")
+        cls.key = os.path.join(cls.certdir, "key.pem")
+        # selbstsigniertes Zert für localhost erzeugen (openssl, nur für den Test)
+        subprocess.run([
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+            "-keyout", cls.key, "-out", cls.cert, "-days", "1",
+            "-subj", "/CN=localhost",
+        ], check=True, capture_output=True)
+        # in einer Neben-Instanz mit TLS_TEST_PORT laufen lassen
+        import threading
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(cls.cert, cls.key)
+        cls.port = next(_PORTS)
+        cls.srv = A.TLSServer(ctx, ("127.0.0.1", cls.port), A.App)
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def test_tls_serves(self):
+        import ssl, urllib.request
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE   # Testzert ist selbstsigniert
+        try:
+            r = urllib.request.urlopen(f"https://127.0.0.1:{self.port}/", context=ctx, timeout=10)
+            self.assertEqual(r.status, 200)
+            body = r.read()
+            self.assertIn("Logo-Wettbewerb".encode(), body)
+        except urllib.error.URLError as e:
+            self.fail(f"TLS request failed: {e}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
